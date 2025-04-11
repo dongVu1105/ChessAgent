@@ -10,22 +10,62 @@ from collections import deque
 import os
 import threading
 import time
+import datetime
 
 # Constants
-BOARD_WIDTH = 512
-BOARD_HEIGHT = 512
+WINDOW_WIDTH = 800
+WINDOW_HEIGHT = 640
+BOARD_WIDTH = int(WINDOW_WIDTH * 0.7)  # 70% của màn hình
+BOARD_HEIGHT = WINDOW_HEIGHT
+INFO_WIDTH = int(WINDOW_WIDTH * 0.3)  # 30% của màn hình
+INFO_HEIGHT = WINDOW_HEIGHT
 SQUARE_SIZE = BOARD_WIDTH // 8
 FPS = 30
+GAME_TIME = 90 * 60  # 90 phút = 5400 giây
 
 # Colors
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 HIGHLIGHT = (100, 255, 100)
 LAST_MOVE = (255, 255, 0)
+BROWN = (139, 69, 19)
+LIGHT_BROWN = (205, 133, 63)
+DARK_BROWN = (101, 67, 33)
+LIGHT_SQUARE = (240, 217, 181)  # Màu ô sáng
+DARK_SQUARE = (181, 136, 99)  # Màu ô tối
+
+# Trạng thái trò chơi
+STATE_MENU = 0
+STATE_HUMAN_VS_HUMAN = 1
+STATE_HUMAN_VS_AI = 2
+STATE_TRAINING = 3  # Thêm trạng thái training
 
 # Initialize pygame
 pygame.init()
-pygame.display.set_caption("Chess AI with Reinforcement Learning")
+pygame.display.set_caption("Chess Game")
+
+# Tải font
+def load_font(size=24):
+    try:
+        # Cố gắng tải font hệ thống đầu tiên
+        available_fonts = pygame.font.get_fonts()
+        preferred_fonts = ['arial', 'timesnewroman', 'verdana', 'dejavusans', 'calibri', 'segoeui']
+        
+        # Tìm font hỗ trợ tiếng Việt trong danh sách ưu tiên
+        found_font = None
+        for font in preferred_fonts:
+            if font.lower() in available_fonts:
+                found_font = font
+                break
+        
+        if found_font:
+            return pygame.font.SysFont(found_font, size)
+        else:
+            # Nếu không tìm thấy font ưu tiên, sử dụng font mặc định
+            return pygame.font.SysFont(pygame.font.get_default_font(), size)
+    except:
+        # Fallback nếu có lỗi
+        return pygame.font.Font(None, size)
 
 # Loading chess piece images
 def load_pieces():
@@ -115,7 +155,7 @@ def board_to_input(board):
 
 # Deep Q-Learning Agent
 class ChessAgent:
-    def __init__(self, epsilon=0.9, gamma=0.95):
+    def __init__(self, epsilon=0.1, gamma=0.95):
         self.epsilon = epsilon  # Exploration rate
         self.gamma = gamma  # Discount factor
         self.model = ChessNN()
@@ -124,13 +164,16 @@ class ChessAgent:
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
         self.memory = deque(maxlen=2000)  # Experience replay buffer
         self.batch_size = 32
+
+        # Thử tải mô hình nếu có
+        self.try_load_model()
         
     def update_target_model(self):
         self.target_model.load_state_dict(self.model.state_dict())
         
-    def act(self, board, training=True):
+    def act(self, board, training=False):
         try:
-            # Epsilon-greedy action selection
+            # Epsilon-greedy action selection (chỉ khi training)
             if training and np.random.rand() <= self.epsilon:
                 # Random move
                 legal_moves = list(board.legal_moves)
@@ -181,7 +224,7 @@ class ChessAgent:
             if legal_moves:
                 return random.choice(legal_moves)
             return None
-        
+            
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
         
@@ -241,27 +284,201 @@ class ChessAgent:
                 self.epsilon *= 0.999
         except Exception as e:
             print(f"Lỗi trong replay(): {e}")
+    
+    def try_load_model(self):
+        """Thử tải mô hình mới nhất nếu có"""
+        try:
+            # Nếu không có đường dẫn cụ thể, tìm model mới nhất
+            model_files = [f for f in os.listdir('.') if f.startswith('chess_model_game_') and f.endswith('.pth')]
+            
+            if not model_files:
+                # Kiểm tra xem có file chess_model.pth không
+                if os.path.exists("chess_model.pth"):
+                    path = "chess_model.pth"
+                    print(f"Tìm thấy file model mặc định: {path}")
+                    self.model.load_state_dict(torch.load(path))
+                    self.update_target_model()
+                    print("Đã tải model thành công!")
+                    return True
+                else:
+                    print("Không tìm thấy file model nào.")
+                    return False
+            else:
+                # Sắp xếp theo số ván đấu (lấy số từ tên file)
+                try:
+                    # Cách an toàn để lấy số từ tên file
+                    def extract_game_number(filename):
+                        try:
+                            # Tách phần giữa 'chess_model_game_' và '.pth'
+                            parts = filename.replace('chess_model_game_', '').replace('.pth', '')
+                            return int(parts)
+                        except ValueError:
+                            # Nếu không thể chuyển đổi thành số, trả về -1
+                            return -1
+                    
+                    model_files.sort(key=extract_game_number)
+                    path = model_files[-1]  # Lấy file mới nhất
+                    print(f"Tự động chọn file model mới nhất: {path}")
+                    self.model.load_state_dict(torch.load(path))
+                    self.update_target_model()
+                    print("Đã tải model thành công!")
+                    return True
+                except Exception as e:
+                    print(f"Lỗi khi tải model: {e}")
+                    return False
+        except Exception as e:
+            print(f"Lỗi khi tìm model: {e}")
+            return False
+            
+    def load_model(self, path=None):
+        """Tải mô hình từ đường dẫn hoặc tìm mô hình mới nhất"""
+        try:
+            # Nếu không có đường dẫn cụ thể, tìm model mới nhất
+            if not path:
+                model_files = [f for f in os.listdir('.') if f.startswith('chess_model_game_') and f.endswith('.pth')]
+                
+                if not model_files:
+                    # Kiểm tra xem có file chess_model.pth không
+                    if os.path.exists("chess_model.pth"):
+                        path = "chess_model.pth"
+                        print(f"Tìm thấy file model mặc định: {path}")
+                    else:
+                        print("Không tìm thấy file model nào. Hãy train mô hình trước.")
+                        return False
+                else:
+                    # Sắp xếp theo số ván đấu (lấy số từ tên file)
+                    try:
+                        # Cách an toàn để lấy số từ tên file
+                        def extract_game_number(filename):
+                            try:
+                                # Tách phần giữa 'chess_model_game_' và '.pth'
+                                parts = filename.replace('chess_model_game_', '').replace('.pth', '')
+                                return int(parts)
+                            except ValueError:
+                                # Nếu không thể chuyển đổi thành số, trả về -1
+                                return -1
+                        
+                        model_files.sort(key=extract_game_number)
+                        path = model_files[-1]  # Lấy file mới nhất
+                        print(f"Tự động chọn file model mới nhất: {path}")
+                    except Exception as e:
+                        # Nếu có lỗi trong quá trình sắp xếp, sử dụng file mặc định
+                        if os.path.exists("chess_model.pth"):
+                            path = "chess_model.pth"
+                            print(f"Lỗi khi sắp xếp files: {e}")
+                            print(f"Sử dụng file model mặc định: {path}")
+                        else:
+                            print(f"Lỗi khi sắp xếp files: {e}")
+                            return False
+            
+            if os.path.exists(path):
+                self.model.load_state_dict(torch.load(path))
+                self.update_target_model()
+                print(f"Đã tải model từ {path}")
+                return True
+            else:
+                print(f"Không tìm thấy file model tại {path}")
+                return False
+        except Exception as e:
+            print(f"Lỗi khi tải model: {e}")
+            return False
+
+# Lớp Menu chính
+class MainMenu:
+    def __init__(self, screen):
+        self.screen = screen
+        self.font_title = load_font(64)
+        self.font = load_font(36)
+        self.selected_option = 0
+        self.options = ["Nguoi - Nguoi", "Nguoi - May", "Huan luyen AI"]
+        
+    def handle_event(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_UP:
+                self.selected_option = (self.selected_option - 1) % len(self.options)
+            elif event.key == pygame.K_DOWN:
+                self.selected_option = (self.selected_option + 1) % len(self.options)
+            elif event.key == pygame.K_RETURN:
+                if self.selected_option == 0:
+                    return STATE_HUMAN_VS_HUMAN
+                elif self.selected_option == 1:
+                    return STATE_HUMAN_VS_AI
+                else:
+                    return STATE_TRAINING
+        return STATE_MENU
+        
+    def draw(self):
+        # Vẽ nền
+        self.screen.fill(DARK_BROWN)
+        
+        # Vẽ tiêu đề
+        title = self.font_title.render("Chess Game", True, WHITE)
+        title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 150))
+        self.screen.blit(title, title_rect)
+        
+        # Vẽ các lựa chọn
+        for i, option in enumerate(self.options):
+            color = LIGHT_BROWN if i == self.selected_option else WHITE
+            text = self.font.render(option, True, color)
+            text_rect = text.get_rect(center=(WINDOW_WIDTH // 2, 300 + i * 80))
+            
+            # Vẽ hình chữ nhật nổi bật cho lựa chọn hiện tại
+            if i == self.selected_option:
+                pygame.draw.rect(self.screen, LIGHT_BROWN, 
+                                 (text_rect.left - 20, text_rect.top - 10, 
+                                  text_rect.width + 40, text_rect.height + 20), 2)
+                
+            self.screen.blit(text, text_rect)
+                
+        # Vẽ hướng dẫn
+        guide = self.font.render("Su dung phim mui ten de chon, Enter de xac nhan", True, WHITE)
+        guide_rect = guide.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 100))
+        self.screen.blit(guide, guide_rect)
 
 # Chess Game class with pygame rendering
 class ChessGame:
     def __init__(self):
-        self.screen = pygame.display.set_mode((BOARD_WIDTH, BOARD_HEIGHT))
+        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
         self.clock = pygame.time.Clock()
+        self.state = STATE_MENU
+        self.menu = MainMenu(self.screen)
+        
+        # Game elements
         self.board = chess.Board()
         self.selected_square = None
         self.pieces = load_pieces()
         self.agent = ChessAgent()
-        self.training_mode = False
         self.last_move = None
-        self.training_thread = None
+        
+        # Timer
+        self.white_time = GAME_TIME  # 90 phút
+        self.black_time = GAME_TIME
+        self.last_move_time = time.time()
+        
+        # Training status
         self.is_training = False
-        self.training_status = "Sẵn sàng"
+        self.training_thread = None
+        self.training_status = "San sang"
         self.games_completed = 0
         
+        # Fonts
+        self.font_large = load_font(32)
+        self.font_medium = load_font(24)
+        self.font_small = load_font(18)
+        
+    def reset_game(self):
+        self.board = chess.Board()
+        self.selected_square = None
+        self.last_move = None
+        self.white_time = GAME_TIME
+        self.black_time = GAME_TIME
+        self.last_move_time = time.time()
+        
     def draw_board(self):
+        # Vẽ bàn cờ
         for row in range(8):
             for col in range(8):
-                color = WHITE if (row + col) % 2 == 0 else (100, 100, 100)
+                color = LIGHT_SQUARE if (row + col) % 2 == 0 else DARK_SQUARE
                 pygame.draw.rect(self.screen, color, 
                                 (col * SQUARE_SIZE, row * SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE))
                 
@@ -283,8 +500,153 @@ class ChessGame:
                     standard_symbol = piece.symbol()
                     self.screen.blit(self.pieces[standard_symbol], 
                                      (col * SQUARE_SIZE, row * SQUARE_SIZE))
+        
+        # Vẽ nhãn cột và hàng
+        for i in range(8):
+            # Số hàng (8->1)
+            text = self.font_small.render(str(8-i), True, BLACK if i % 2 == 0 else WHITE)
+            self.screen.blit(text, (5, i * SQUARE_SIZE + 5))
+            
+            # Chữ cột (a->h)
+            text = self.font_small.render(chr(97+i), True, BLACK if (i+7) % 2 == 0 else WHITE)
+            self.screen.blit(text, (i * SQUARE_SIZE + SQUARE_SIZE - 15, BOARD_HEIGHT - 20))
+    
+    def draw_info_panel(self):
+        # Vẽ panel thông tin bên phải
+        pygame.draw.rect(self.screen, BROWN, (BOARD_WIDTH, 0, INFO_WIDTH, INFO_HEIGHT))
+        
+        # Vẽ đường phân cách
+        pygame.draw.line(self.screen, WHITE, (BOARD_WIDTH, 0), (BOARD_WIDTH, BOARD_HEIGHT), 3)
+        
+        # Hiển thị thời gian
+        white_min = int(self.white_time // 60)
+        white_sec = int(self.white_time % 60)
+        black_min = int(self.black_time // 60)
+        black_sec = int(self.black_time % 60)
+        
+        # Sửa lại nhãn: Trắng hiển thị cho quân trắng, Đen hiển thị cho quân đen
+        white_time_text = f"Trang: {white_min:02d}:{white_sec:02d}"
+        black_time_text = f"Den: {black_min:02d}:{black_sec:02d}"
+        
+        # Đổi màu cho đồng hồ của người đang đi
+        white_color = HIGHLIGHT if self.board.turn == chess.WHITE else WHITE
+        black_color = HIGHLIGHT if self.board.turn == chess.BLACK else WHITE
+        
+        white_time_surface = self.font_medium.render(white_time_text, True, white_color)
+        black_time_surface = self.font_medium.render(black_time_text, True, black_color)
+        
+        self.screen.blit(white_time_surface, (BOARD_WIDTH + 20, 30))
+        self.screen.blit(black_time_surface, (BOARD_WIDTH + 20, 70))
+        
+        # Vẽ lượt đi hiện tại
+        turn_text = "Luot: " + ("Trang" if self.board.turn == chess.WHITE else "Den")
+        turn_surface = self.font_medium.render(turn_text, True, WHITE)
+        self.screen.blit(turn_surface, (BOARD_WIDTH + 20, 120))
+        
+        # Game status
+        status = ""
+        if self.board.is_checkmate():
+            status = "Chieu bi!"
+            winner = "Trang" if not self.board.turn else "Den"
+            status += f" {winner} thang!"
+        elif self.board.is_stalemate():
+            status = "Hoa co - be tac!"
+        elif self.board.is_insufficient_material():
+            status = "Hoa co - thieu quan!"
+        elif self.board.is_check():
+            status = "Chieu tuong!"
+        
+        if status:
+            status_surface = self.font_medium.render(status, True, WHITE)
+            self.screen.blit(status_surface, (BOARD_WIDTH + 10, 170))
+        
+        # Chế độ chơi
+        mode = "Che do: "
+        if self.state == STATE_HUMAN_VS_HUMAN:
+            mode += "Nguoi-Nguoi"
+        elif self.state == STATE_HUMAN_VS_AI:
+            mode += "Nguoi-May"
+        else:
+            mode += "Training"
+        
+        mode_surface = self.font_small.render(mode, True, WHITE)
+        self.screen.blit(mode_surface, (BOARD_WIDTH + 10, 220))
+        
+        # Hiển thị nước đi gần nhất
+        if self.last_move:
+            move_text = "Nuoc di gan nhat: "
+            move_uci = self.last_move.uci()
+            from_sq = move_uci[:2]
+            to_sq = move_uci[2:4]
+            move_text += f"{from_sq}->{to_sq}"
+            
+            move_surface = self.font_small.render(move_text, True, WHITE)
+            self.screen.blit(move_surface, (BOARD_WIDTH + 10, 250))
+        
+        # Hiển thị trạng thái training nếu đang training
+        if self.state == STATE_TRAINING:
+            if self.is_training:
+                train_text = f"Training: {self.games_completed}"
+                train_surface = self.font_small.render(train_text, True, LIGHT_BROWN)
+                self.screen.blit(train_surface, (BOARD_WIDTH + 10, 280))
+                
+                status_text = f"{self.training_status}"
+                status_surface = self.font_small.render(status_text, True, WHITE)
+                self.screen.blit(status_surface, (BOARD_WIDTH + 10, 310))
+            else:
+                train_text = "Ban co the:"
+                train_surface = self.font_small.render(train_text, True, WHITE)
+                self.screen.blit(train_surface, (BOARD_WIDTH + 10, 280))
+                
+                options = [
+                    "S: Bat dau training",
+                    "L: Tai model",
+                    "X: Dung training",
+                    "ESC: Quay lai menu"
+                ]
+                
+                y_pos = 310
+                for option in options:
+                    opt_surface = self.font_small.render(option, True, LIGHT_BROWN)
+                    self.screen.blit(opt_surface, (BOARD_WIDTH + 10, y_pos))
+                    y_pos += 25
+        
+        # Hướng dẫn
+        if self.state != STATE_TRAINING:
+            instructions = [
+                "Huong dan:",
+                "R: Choi lai",
+                "ESC: Ve menu",
+                "Click: Chon quan/nuoc di"
+            ]
+            
+            y_pos = 300
+            for instruction in instructions:
+                inst_surface = self.font_small.render(instruction, True, WHITE)
+                self.screen.blit(inst_surface, (BOARD_WIDTH + 10, y_pos))
+                y_pos += 30
+
+    def update_timer(self):
+        if self.state == STATE_TRAINING or self.board.is_game_over():
+            return
+            
+        current_time = time.time()
+        if self.last_move_time is not None:
+            elapsed = current_time - self.last_move_time
+            
+            # Người đi lượt hiện tại sẽ bị trừ thời gian
+            if self.board.turn == chess.WHITE:
+                self.white_time = max(0, self.white_time - elapsed)
+            else:
+                self.black_time = max(0, self.black_time - elapsed)
+        
+        self.last_move_time = current_time
     
     def handle_click(self, pos):
+        # Chỉ xử lý click nếu nằm trong bàn cờ
+        if pos[0] >= BOARD_WIDTH:
+            return
+            
         col = pos[0] // SQUARE_SIZE
         row = pos[1] // SQUARE_SIZE
         square = row * 8 + col
@@ -299,7 +661,7 @@ class ChessGame:
             try:
                 move = chess.Move(self.selected_square, square)
                 # Check for promotion
-                if self.board.piece_at(self.selected_square).piece_type == chess.PAWN:
+                if self.board.piece_at(self.selected_square) and self.board.piece_at(self.selected_square).piece_type == chess.PAWN:
                     if (square // 8 == 0 and self.board.turn == chess.BLACK) or \
                        (square // 8 == 7 and self.board.turn == chess.WHITE):
                         move.promotion = chess.QUEEN  # Always promote to queen for simplicity
@@ -315,73 +677,39 @@ class ChessGame:
     
     def make_move(self, move):
         try:
-            # Store current state for RL training
-            old_state = chess.Board(self.board.fen())
+            # Cập nhật thời gian trước khi đi nước mới
+            self.update_timer()
             
             # Make the move
             self.board.push(move)
             self.last_move = move
             
-            # Get reward
-            reward = self.get_reward()
-            
-            # Store experience for RL training
-            if self.training_mode:
-                done = self.board.is_game_over()
-                self.agent.remember(old_state, move, reward, self.board, done)
-                self.agent.replay()
-                
-            # If game not over and in AI mode, make AI move
-            if not self.board.is_game_over() and self.training_mode:
+            # Nếu đang ở chế độ người-máy và đến lượt máy
+            if self.state == STATE_HUMAN_VS_AI and self.board.turn == chess.BLACK and not self.board.is_game_over():
+                # Thêm chút độ trễ để người chơi thấy được nước đi của mình trước
+                pygame.time.delay(500)
                 self.make_ai_move()
+                
         except Exception as e:
             print(f"Lỗi trong make_move: {e}")
     
     def make_ai_move(self):
         try:
+            # Cập nhật thời gian trước khi máy đi
+            self.update_timer()
+            
+            # Lấy nước đi tốt nhất từ AI
             move = self.agent.act(self.board)
             if move:
-                self.make_move(move)
+                # Make the move
+                self.board.push(move)
+                self.last_move = move
+                
+                # Cập nhật thời gian sau khi máy đi
+                self.update_timer()
         except Exception as e:
             print(f"Lỗi trong make_ai_move: {e}")
-    
-    def get_reward(self):
-        try:
-            # Basic reward function
-            if self.board.is_checkmate():
-                return 1.0 if self.board.turn == chess.BLACK else -1.0  # White wins if black is checkmated
-            elif self.board.is_stalemate() or self.board.is_insufficient_material():
-                return 0.0
             
-            # Material count
-            white_material = 0
-            black_material = 0
-            piece_values = {
-                chess.PAWN: 1,
-                chess.KNIGHT: 3,
-                chess.BISHOP: 3,
-                chess.ROOK: 5,
-                chess.QUEEN: 9,
-                chess.KING: 0  # King has infinite value but we don't count it for material
-            }
-            
-            for square in chess.SQUARES:
-                piece = self.board.piece_at(square)
-                if piece:
-                    value = piece_values[piece.piece_type]
-                    if piece.color == chess.WHITE:
-                        white_material += value
-                    else:
-                        black_material += value
-            
-            material_advantage = (white_material - black_material) / 100.0  # Scale down
-            
-            # Return from white's perspective
-            return material_advantage
-        except Exception as e:
-            print(f"Lỗi trong get_reward: {e}")
-            return 0.0
-    
     def train_worker(self, num_games=100):
         """Chạy quá trình training trong một thread riêng biệt"""
         try:
@@ -392,7 +720,7 @@ class ChessGame:
                 if not self.is_training:  # Cho phép dừng quá trình training
                     break
                     
-                self.training_status = f"Đang train trận {game+1}/{num_games}"
+                self.training_status = f"Dang train tran {game+1}/{num_games}"
                 game_board = chess.Board()  # Dùng một bàn cờ mới để tránh xung đột
                 done = False
                 moves_count = 0
@@ -435,10 +763,10 @@ class ChessGame:
                     except Exception as e:
                         print(f"Lỗi khi lưu mô hình: {e}")
             
-            self.training_status = f"Đã hoàn thành {self.games_completed}/{num_games} trận"
+            self.training_status = f"Da hoan thanh {self.games_completed}/{num_games} tran"
             self.is_training = False
         except Exception as e:
-            self.training_status = f"Lỗi training: {str(e)}"
+            self.training_status = f"Loi training: {str(e)}"
             self.is_training = False
             print(f"Lỗi trong train_worker: {e}")
             
@@ -481,151 +809,75 @@ class ChessGame:
             print("Đang trong quá trình training, không thể bắt đầu mới")
             return
             
-        self.training_status = "Đang chuẩn bị..."
+        self.training_status = "Dang chuan bi..."
         self.training_thread = threading.Thread(target=self.train_worker, args=(num_games,))
         self.training_thread.daemon = True  # Thread sẽ kết thúc khi chương trình chính kết thúc
         self.training_thread.start()
-    
-    def load_model(self, path=None):
-        try:
-            # Nếu không có đường dẫn cụ thể, tìm model mới nhất
-            if not path:
-                model_files = [f for f in os.listdir('.') if f.startswith('chess_model_game_') and f.endswith('.pth')]
-                
-                if not model_files:
-                    # Kiểm tra xem có file chess_model.pth không
-                    if os.path.exists("chess_model.pth"):
-                        path = "chess_model.pth"
-                        print(f"Tìm thấy file model mặc định: {path}")
-                    else:
-                        print("Không tìm thấy file model nào. Hãy train mô hình trước.")
-                        self.training_status = "Không tìm thấy file model nào"
-                        return False
-                else:
-                    # Sắp xếp theo số ván đấu (lấy số từ tên file)
-                    try:
-                        # Cách an toàn để lấy số từ tên file
-                        def extract_game_number(filename):
-                            try:
-                                # Tách phần giữa 'chess_model_game_' và '.pth'
-                                parts = filename.replace('chess_model_game_', '').replace('.pth', '')
-                                return int(parts)
-                            except ValueError:
-                                # Nếu không thể chuyển đổi thành số, trả về -1
-                                return -1
-                        
-                        model_files.sort(key=extract_game_number)
-                        path = model_files[-1]  # Lấy file mới nhất
-                        print(f"Tự động chọn file model mới nhất: {path}")
-                    except Exception as e:
-                        # Nếu có lỗi trong quá trình sắp xếp, sử dụng file mặc định
-                        if os.path.exists("chess_model.pth"):
-                            path = "chess_model.pth"
-                            print(f"Lỗi khi sắp xếp files: {e}")
-                            print(f"Sử dụng file model mặc định: {path}")
-                        else:
-                            print(f"Lỗi khi sắp xếp files: {e}")
-                            self.training_status = f"Lỗi khi tìm model: {str(e)}"
-                            return False
-            
-            if os.path.exists(path):
-                self.agent.model.load_state_dict(torch.load(path))
-                self.agent.update_target_model()
-                print(f"Đã tải model từ {path}")
-                
-                # Hiển thị thông báo trên màn hình
-                self.training_status = f"Đã tải model: {path}"
-                return True
-            else:
-                print(f"Không tìm thấy file model tại {path}")
-                self.training_status = f"Không tìm thấy model: {path}"
-                return False
-        except Exception as e:
-            print(f"Lỗi khi tải model: {e}")
-            self.training_status = f"Lỗi khi tải model: {str(e)}"
-            return False
     
     def run(self):
         running = True
         
         while running:
+            # Xử lý các sự kiện
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
-                elif event.type == pygame.MOUSEBUTTONDOWN:
-                    # Không cho phép tương tác chuột khi đang training
-                    if not self.is_training:
-                        pos = pygame.mouse.get_pos()
-                        self.handle_click(pos)
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_t:  # T key to toggle training mode
-                        if not self.is_training:  # Chỉ cho phép chuyển đổi khi không trong quá trình training
-                            self.training_mode = not self.training_mode
-                            print(f"Training mode: {'On' if self.training_mode else 'Off'}")
-                    elif event.key == pygame.K_a:  # A key to make AI move
-                        if not self.is_training:
-                            self.make_ai_move()
-                    elif event.key == pygame.K_r:  # R key to reset board
-                        if not self.is_training:
-                            self.board.reset()
-                            self.selected_square = None
-                            self.last_move = None
-                    elif event.key == pygame.K_s:  # S key to start training
-                        if not self.is_training:
+                
+                # Xử lý sự kiện dựa trên trạng thái hiện tại
+                if self.state == STATE_MENU:
+                    new_state = self.menu.handle_event(event)
+                    if new_state != STATE_MENU:
+                        self.state = new_state
+                        if new_state != STATE_TRAINING:
+                            self.reset_game()
+                            self.last_move_time = time.time()
+                elif self.state == STATE_TRAINING:
+                    if event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_ESCAPE:
+                            self.state = STATE_MENU
+                            # Dừng training nếu đang chạy
+                            if self.is_training:
+                                self.is_training = False
+                                self.training_status = "Đã dừng training"
+                        elif event.key == pygame.K_s and not self.is_training:
                             print("Bắt đầu quá trình training...")
                             self.start_training(100)  # Train for 100 games
-                    elif event.key == pygame.K_l:  # L key to load model
-                        if not self.is_training:
-                            # Gọi hàm load_model mà không chỉ định đường dẫn
-                            # để tự động tìm model mới nhất
-                            self.load_model()
-                    elif event.key == pygame.K_x:  # X key to stop training
-                        if self.is_training:
+                        elif event.key == pygame.K_l and not self.is_training:
+                            self.agent.load_model()
+                            self.training_status = "Da tai model thanh cong"
+                        elif event.key == pygame.K_x and self.is_training:
                             self.is_training = False
-                            self.training_status = "Đã dừng training thủ công"
+                            self.training_status = "Da dung training thu cong"
                             print("Đã gửi yêu cầu dừng quá trình training...")
+                else:  # STATE_HUMAN_VS_HUMAN or STATE_HUMAN_VS_AI
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                        pos = pygame.mouse.get_pos()
+                        self.handle_click(pos)
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_ESCAPE:
+                            self.state = STATE_MENU
+                        elif event.key == pygame.K_r:
+                            self.reset_game()
             
-            # Draw everything
-            self.screen.fill(BLACK)
-            self.draw_board()
-            
-            # Show game status
-            font = pygame.font.Font(None, 24)
-            
-            # Game status
-            status = "Game in progress"
-            if self.board.is_checkmate():
-                status = "Checkmate!"
-            elif self.board.is_stalemate():
-                status = "Stalemate!"
-            elif self.board.is_check():
-                status = "Check!"
+            # Cập nhật thời gian nếu đang trong chế độ chơi
+            if self.state not in [STATE_MENU, STATE_TRAINING] and not self.board.is_game_over():
+                current_time = time.time()
+                if self.last_move_time is not None:
+                    elapsed = current_time - self.last_move_time
+                    
+                    if self.board.turn == chess.WHITE:
+                        self.white_time = max(0, self.white_time - elapsed)
+                    else:
+                        self.black_time = max(0, self.black_time - elapsed)
                 
-            text = font.render(status, True, WHITE)
-            self.screen.blit(text, (10, 10))
+                self.last_move_time = current_time
             
-            # Training status
-            if self.is_training:
-                train_text = font.render(f"Training: {self.training_status} ({self.games_completed})", True, (255, 200, 0))
-                self.screen.blit(train_text, (10, 40))
-            else:
-                # Hiển thị trạng thái model khi không đang training
-                if hasattr(self, 'training_status') and self.training_status != "Sẵn sàng":
-                    status_text = font.render(f"Status: {self.training_status}", True, (200, 200, 255))
-                    self.screen.blit(status_text, (10, 40))
-            
-            # Display current piece symbols legend
-            legend_text = "White: p1,r1,n1,b1,q1,k1 | Black: p,r,n,b,q,k"
-            legend = font.render(legend_text, True, WHITE)
-            self.screen.blit(legend, (BOARD_WIDTH - 350, BOARD_HEIGHT - 30))
-            
-            # Display mode
-            mode = font.render(f"Mode: {'Training' if self.training_mode else 'Play'}", True, WHITE)
-            self.screen.blit(mode, (BOARD_WIDTH - 120, 10))
-            
-            # Controls help
-            controls = font.render("T:Mode A:AI R:Reset S:Train L:Load X:Stop", True, (200, 200, 200))
-            self.screen.blit(controls, (10, BOARD_HEIGHT - 30))
+            # Vẽ giao diện dựa trên trạng thái hiện tại
+            if self.state == STATE_MENU:
+                self.menu.draw()
+            else:  # In game or training
+                self.draw_board()
+                self.draw_info_panel()
             
             pygame.display.flip()
             self.clock.tick(FPS)
