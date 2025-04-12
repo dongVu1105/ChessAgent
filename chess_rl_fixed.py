@@ -153,9 +153,244 @@ def board_to_input(board):
         # Trả về tensor rỗng nếu có lỗi
         return torch.zeros((1, 12, 8, 8), dtype=torch.float32)
 
-# Deep Q-Learning Agent
+# ------------------- Thêm các AI Agent mới -------------------
+
+class RandomAgent:
+    """Agent đưa ra nước đi ngẫu nhiên từ các nước đi hợp lệ"""
+    
+    def __init__(self):
+        self.name = "Random Agent"
+    
+    def act(self, board, training=False):
+        legal_moves = list(board.legal_moves)
+        if legal_moves:
+            return random.choice(legal_moves)
+        return None
+
+class MinimaxAgent:
+    """Agent sử dụng thuật toán Minimax với độ sâu hạn chế"""
+    
+    def __init__(self, depth=2):
+        self.name = f"Minimax (depth={depth})"
+        self.depth = depth
+        # Giá trị của các quân cờ
+        self.piece_values = {
+            chess.PAWN: 100,
+            chess.KNIGHT: 320,
+            chess.BISHOP: 330,
+            chess.ROOK: 500,
+            chess.QUEEN: 900,
+            chess.KING: 20000
+        }
+        
+        # Bảng giá trị vị trí cho quân tốt (từ góc nhìn của quân trắng)
+        self.pawn_table = [
+            0,  0,  0,  0,  0,  0,  0,  0,
+            50, 50, 50, 50, 50, 50, 50, 50,
+            10, 10, 20, 30, 30, 20, 10, 10,
+            5,  5, 10, 25, 25, 10,  5,  5,
+            0,  0,  0, 20, 20,  0,  0,  0,
+            5, -5,-10,  0,  0,-10, -5,  5,
+            5, 10, 10,-20,-20, 10, 10,  5,
+            0,  0,  0,  0,  0,  0,  0,  0
+        ]
+        
+        # Bảng giá trị vị trí cho các quân khác (đơn giản)
+        self.knight_table = [
+            -50,-40,-30,-30,-30,-30,-40,-50,
+            -40,-20,  0,  0,  0,  0,-20,-40,
+            -30,  0, 10, 15, 15, 10,  0,-30,
+            -30,  5, 15, 20, 20, 15,  5,-30,
+            -30,  0, 15, 20, 20, 15,  0,-30,
+            -30,  5, 10, 15, 15, 10,  5,-30,
+            -40,-20,  0,  5,  5,  0,-20,-40,
+            -50,-40,-30,-30,-30,-30,-40,-50
+        ]
+    
+    def evaluate_board(self, board):
+        """Đánh giá trạng thái bàn cờ"""
+        if board.is_checkmate():
+            # Nếu trắng bị chiếu bí, trả về -10000, còn đen bị chiếu bí, trả về 10000
+            return -10000 if board.turn == chess.WHITE else 10000
+        
+        if board.is_stalemate() or board.is_insufficient_material():
+            return 0  # Hòa cờ
+        
+        total = 0
+        
+        # Tính toán giá trị quân cờ
+        for square in chess.SQUARES:
+            piece = board.piece_at(square)
+            if piece:
+                value = self.piece_values[piece.piece_type]
+                
+                # Thêm giá trị vị trí cho quân tốt và quân mã
+                if piece.piece_type == chess.PAWN:
+                    # Lấy chỉ số trong bảng vị trí dựa trên màu quân
+                    position_index = square if piece.color == chess.WHITE else 63 - square
+                    value += self.pawn_table[position_index]
+                elif piece.piece_type == chess.KNIGHT:
+                    position_index = square if piece.color == chess.WHITE else 63 - square
+                    value += self.knight_table[position_index]
+                
+                # Cộng điểm cho quân trắng, trừ điểm cho quân đen
+                if piece.color == chess.WHITE:
+                    total += value
+                else:
+                    total -= value
+        
+        return total
+    
+    def minimax(self, board, depth, alpha, beta, maximizing_player):
+        """Thuật toán minimax với cắt tỉa alpha-beta"""
+        if depth == 0 or board.is_game_over():
+            return self.evaluate_board(board)
+        
+        if maximizing_player:
+            max_eval = -float('inf')
+            for move in board.legal_moves:
+                board.push(move)
+                eval = self.minimax(board, depth - 1, alpha, beta, False)
+                board.pop()
+                max_eval = max(max_eval, eval)
+                alpha = max(alpha, eval)
+                if beta <= alpha:
+                    break
+            return max_eval
+        else:
+            min_eval = float('inf')
+            for move in board.legal_moves:
+                board.push(move)
+                eval = self.minimax(board, depth - 1, alpha, beta, True)
+                board.pop()
+                min_eval = min(min_eval, eval)
+                beta = min(beta, eval)
+                if beta <= alpha:
+                    break
+            return min_eval
+    
+    def act(self, board, training=False):
+        """Trả về nước đi tốt nhất dựa trên minimax"""
+        legal_moves = list(board.legal_moves)
+        if not legal_moves:
+            return None
+        
+        best_move = legal_moves[0]
+        best_value = -float('inf') if board.turn == chess.WHITE else float('inf')
+        
+        for move in legal_moves:
+            board.push(move)
+            
+            # Đánh giá nước đi
+            if board.turn == chess.WHITE:  # Sau khi đi, đến lượt đối phương (đen)
+                value = self.minimax(board, self.depth - 1, -float('inf'), float('inf'), False)
+                if value > best_value:
+                    best_value = value
+                    best_move = move
+            else:  # Sau khi đi, đến lượt đối phương (trắng)
+                value = self.minimax(board, self.depth - 1, -float('inf'), float('inf'), True)
+                if value < best_value:
+                    best_value = value
+                    best_move = move
+            
+            board.pop()
+        
+        return best_move
+
+class StockfishAgent:
+    """Agent sử dụng Stockfish (nếu có)"""
+    
+    def __init__(self, depth=1, time_limit=0.1):
+        self.name = "Stockfish"
+        self.depth = depth
+        self.time_limit = time_limit
+        self.engine = None
+        self.available = self._initialize_engine()
+    
+    def _initialize_engine(self):
+        try:
+            # Tìm đường dẫn đến Stockfish
+            stockfish_path = self._find_stockfish()
+            if stockfish_path:
+                # Cố gắng import module chess.engine
+                try:
+                    import chess.engine
+                    self.engine = chess.engine.SimpleEngine.popen_uci(stockfish_path)
+                    return True
+                except ImportError:
+                    print("Không thể import module chess.engine. Cần cài đặt python-chess version >= 0.23.0")
+                    return False
+                except Exception as e:
+                    print(f"Lỗi khi khởi tạo Stockfish engine: {e}")
+                    return False
+            else:
+                print("Không tìm thấy Stockfish. StockfishAgent không khả dụng.")
+                return False
+        except Exception as e:
+            print(f"Lỗi khi khởi tạo Stockfish: {e}")
+            return False
+    
+    def _find_stockfish(self):
+        # Tìm kiếm Stockfish trong các vị trí thông dụng
+        possible_paths = [
+            "stockfish",                       # Trong PATH
+            "./stockfish",                     # Thư mục hiện tại
+            "./engines/stockfish",             # Thư mục engines 
+            "engines/stockfish",               # Thư mục engines không có ./
+            "stockfish.exe",                   # Windows
+            "./stockfish.exe",                 # Windows trong thư mục hiện tại
+            "./engines/stockfish.exe",         # Windows trong thư mục engines 
+        ]
+        
+        for path in possible_paths:
+            try:
+                # Thử mở để xem có tồn tại không
+                if os.path.exists(path):
+                    return path
+            except:
+                pass
+        return None
+    
+    def act(self, board, training=False):
+        """Sử dụng Stockfish để tìm nước đi tốt nhất"""
+        if not self.available or self.engine is None:
+            # Nếu Stockfish không khả dụng, sử dụng nước đi ngẫu nhiên
+            legal_moves = list(board.legal_moves)
+            if legal_moves:
+                return random.choice(legal_moves)
+            return None
+        
+        try:
+            # Import lại chess.engine để đảm bảo có thể sử dụng
+            import chess.engine
+            
+            # Sử dụng thời gian ngắn hoặc độ sâu thấp khi training
+            if training:
+                result = self.engine.play(board, chess.engine.Limit(time=self.time_limit))
+            else:
+                result = self.engine.play(board, chess.engine.Limit(depth=self.depth))
+            return result.move
+        except Exception as e:
+            print(f"Lỗi khi sử dụng Stockfish: {e}")
+            # Fallback to random move
+            legal_moves = list(board.legal_moves)
+            if legal_moves:
+                return random.choice(legal_moves)
+            return None
+    
+    def __del__(self):
+        """Đảm bảo đóng engine khi đối tượng bị hủy"""
+        if hasattr(self, 'available') and self.available and self.engine:
+            try:
+                self.engine.quit()
+            except:
+                pass
+
+# ------------------- Deep Q-Learning Agent -------------------
+
 class ChessAgent:
     def __init__(self, epsilon=0.1, gamma=0.95):
+        self.name = "Deep RL Agent"
         self.epsilon = epsilon  # Exploration rate
         self.gamma = gamma  # Discount factor
         self.model = ChessNN()
@@ -383,14 +618,15 @@ class ChessAgent:
             print(f"Lỗi khi tải model: {e}")
             return False
 
-# Lớp Menu chính
+# ------------------- Lớp Menu chính -------------------
+
 class MainMenu:
     def __init__(self, screen):
         self.screen = screen
         self.font_title = load_font(64)
         self.font = load_font(36)
         self.selected_option = 0
-        self.options = ["Nguoi - Nguoi", "Nguoi - May", "Huan luyen AI"]
+        self.options = ["Người - Người", "Người - Máy", "Huấn luyện AI"]
         
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
@@ -435,23 +671,98 @@ class MainMenu:
         guide_rect = guide.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 100))
         self.screen.blit(guide, guide_rect)
 
-# Chess Game class with pygame rendering
+# ------------------- Menu chọn đối thủ training -------------------
+
+class TrainingMenu:
+    """Menu lựa chọn đối thủ để train AI"""
+    def __init__(self, screen, agents):
+        self.screen = screen
+        self.font_title = load_font(36)
+        self.font = load_font(24)
+        self.selected_option = 0
+        self.agents = agents  # Danh sách các agent khả dụng
+        
+    def handle_event(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_UP:
+                self.selected_option = (self.selected_option - 1) % len(self.agents)
+            elif event.key == pygame.K_DOWN:
+                self.selected_option = (self.selected_option + 1) % len(self.agents)
+            elif event.key == pygame.K_RETURN:
+                return self.selected_option
+            elif event.key == pygame.K_ESCAPE:
+                return -1  # Trở về menu chính
+        return None
+        
+    def draw(self):
+        # Vẽ nền
+        self.screen.fill(DARK_BROWN)
+        
+        # Vẽ tiêu đề
+        title = self.font_title.render("Chon doi thu de training", True, WHITE)
+        title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 100))
+        self.screen.blit(title, title_rect)
+        
+        # Vẽ các lựa chọn
+        y_pos = 180
+        for i, agent in enumerate(self.agents):
+            color = LIGHT_BROWN if i == self.selected_option else WHITE
+            text = self.font.render(agent.name, True, color)
+            text_rect = text.get_rect(center=(WINDOW_WIDTH // 2, y_pos))
+            
+            # Vẽ hình chữ nhật nổi bật cho lựa chọn hiện tại
+            if i == self.selected_option:
+                pygame.draw.rect(self.screen, LIGHT_BROWN, 
+                                (text_rect.left - 20, text_rect.top - 10, 
+                                text_rect.width + 40, text_rect.height + 20), 2)
+                
+            self.screen.blit(text, text_rect)
+            y_pos += 60
+                
+        # Vẽ hướng dẫn
+        guide = self.font.render("Su dung phim mui ten de chon, Enter de xac nhan", True, WHITE)
+        guide_rect = guide.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 100))
+        self.screen.blit(guide, guide_rect)
+        
+        esc_guide = self.font.render("ESC: Quay lai", True, WHITE)
+        esc_rect = esc_guide.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 60))
+        self.screen.blit(esc_guide, esc_rect)
+
+# ------------------- Chess Game class -------------------
+
 class ChessGame:
     def __init__(self):
         self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
         self.clock = pygame.time.Clock()
         self.state = STATE_MENU
+        
+        # Khởi tạo các AI agent
+        self.agent = ChessAgent()  # Deep RL Agent chính
+        self.training_agents = [
+            self.agent,                # Self-play (đánh với chính mình)
+            RandomAgent(),             # Agent ngẫu nhiên
+            MinimaxAgent(depth=2),     # Agent Minimax độ sâu 2
+            StockfishAgent(depth=1)    # Stockfish nếu có
+        ]
+        
+        # Lọc ra các agent khả dụng (loại bỏ StockfishAgent nếu không tìm thấy Stockfish)
+        self.available_agents = [agent for agent in self.training_agents if not hasattr(agent, 'available') or agent.available]
+        
+        # Khởi tạo các menu
         self.menu = MainMenu(self.screen)
+        self.training_menu = TrainingMenu(self.screen, self.available_agents)
+        
+        # Đối thủ training hiện tại
+        self.opponent_agent = self.agent  # Mặc định là self-play
         
         # Game elements
         self.board = chess.Board()
         self.selected_square = None
         self.pieces = load_pieces()
-        self.agent = ChessAgent()
         self.last_move = None
         
         # Timer
-        self.white_time = GAME_TIME  # 90 phút
+        self.white_time = GAME_TIME
         self.black_time = GAME_TIME
         self.last_move_time = time.time()
         
@@ -460,6 +771,7 @@ class ChessGame:
         self.training_thread = None
         self.training_status = "San sang"
         self.games_completed = 0
+        self.showing_training_menu = False
         
         # Fonts
         self.font_large = load_font(32)
@@ -590,15 +902,21 @@ class ChessGame:
                 train_surface = self.font_small.render(train_text, True, LIGHT_BROWN)
                 self.screen.blit(train_surface, (BOARD_WIDTH + 10, 280))
                 
+                # Hiển thị đối thủ đang training cùng
+                opponent_text = f"Doi thu: {self.opponent_agent.name}"
+                opponent_surface = self.font_small.render(opponent_text, True, WHITE)
+                self.screen.blit(opponent_surface, (BOARD_WIDTH + 10, 310))
+                
                 status_text = f"{self.training_status}"
                 status_surface = self.font_small.render(status_text, True, WHITE)
-                self.screen.blit(status_surface, (BOARD_WIDTH + 10, 310))
+                self.screen.blit(status_surface, (BOARD_WIDTH + 10, 340))
             else:
                 train_text = "Ban co the:"
                 train_surface = self.font_small.render(train_text, True, WHITE)
                 self.screen.blit(train_surface, (BOARD_WIDTH + 10, 280))
                 
                 options = [
+                    "T: Chon doi thu",
                     "S: Bat dau training",
                     "L: Tai model",
                     "X: Dung training",
@@ -709,67 +1027,7 @@ class ChessGame:
                 self.update_timer()
         except Exception as e:
             print(f"Lỗi trong make_ai_move: {e}")
-            
-    def train_worker(self, num_games=100):
-        """Chạy quá trình training trong một thread riêng biệt"""
-        try:
-            self.is_training = True
-            self.games_completed = 0
-            
-            for game in range(num_games):
-                if not self.is_training:  # Cho phép dừng quá trình training
-                    break
-                    
-                self.training_status = f"Dang train tran {game+1}/{num_games}"
-                game_board = chess.Board()  # Dùng một bàn cờ mới để tránh xung đột
-                done = False
-                moves_count = 0
-                max_moves = 200  # Giới hạn số lượng nước đi để tránh vòng lặp vô hạn
-                
-                while not done and moves_count < max_moves:
-                    move = self.agent.act(game_board, training=True)
-                    if not move:
-                        break
-                        
-                    old_state = chess.Board(game_board.fen())
-                    game_board.push(move)
-                    reward = self._get_reward_for_board(game_board)
-                    done = game_board.is_game_over()
-                    
-                    self.agent.remember(old_state, move, reward, game_board, done)
-                    
-                    # Chỉ gọi replay() sau mỗi 10 nước đi để tăng hiệu suất
-                    if moves_count % 10 == 0:
-                        self.agent.replay()
-                    
-                    moves_count += 1
-                
-                self.games_completed = game + 1
-                print(f"Game {game+1}/{num_games} hoàn thành sau {moves_count} nước")
-                
-                # Cập nhật target model sau mỗi trận đấu
-                self.agent.update_target_model()
-                
-                # Save model periodically
-                if (game + 1) % 10 == 0:
-                    try:
-                        model_path = f"chess_model_game_{game+1}.pth"
-                        torch.save(self.agent.model.state_dict(), model_path)
-                        print(f"Đã lưu mô hình tại {model_path}")
-                        
-                        # Lưu thêm một bản sao với tên cố định để dễ tải sau này
-                        torch.save(self.agent.model.state_dict(), "chess_model.pth")
-                        print("Đã lưu bản sao tại chess_model.pth")
-                    except Exception as e:
-                        print(f"Lỗi khi lưu mô hình: {e}")
-            
-            self.training_status = f"Da hoan thanh {self.games_completed}/{num_games} tran"
-            self.is_training = False
-        except Exception as e:
-            self.training_status = f"Loi training: {str(e)}"
-            self.is_training = False
-            print(f"Lỗi trong train_worker: {e}")
-            
+    
     def _get_reward_for_board(self, board):
         """Tính reward cho một bàn cờ cụ thể (sử dụng trong thread training)"""
         try:
@@ -803,6 +1061,75 @@ class ChessGame:
             print(f"Lỗi trong _get_reward_for_board: {e}")
             return 0.0
     
+    def train_worker(self, num_games=100):
+        """Chạy quá trình training trong một thread riêng biệt"""
+        try:
+            self.is_training = True
+            self.games_completed = 0
+            
+            for game in range(num_games):
+                if not self.is_training:  # Cho phép dừng quá trình training
+                    break
+                    
+                self.training_status = f"Dang train tran {game+1}/{num_games}"
+                game_board = chess.Board()  # Dùng một bàn cờ mới để tránh xung đột
+                done = False
+                moves_count = 0
+                max_moves = 200  # Giới hạn số lượng nước đi để tránh vòng lặp vô hạn
+                
+                # RL Agent luôn đi quân trắng, đối thủ đi quân đen
+                while not done and moves_count < max_moves:
+                    # RL Agent's turn (WHITE)
+                    if game_board.turn == chess.WHITE:
+                        move = self.agent.act(game_board, training=True)
+                    else:
+                        # Opponent's turn (BLACK)
+                        move = self.opponent_agent.act(game_board, training=True)
+                    
+                    if not move:
+                        break
+                        
+                    old_state = chess.Board(game_board.fen())
+                    game_board.push(move)
+                    reward = self._get_reward_for_board(game_board)
+                    done = game_board.is_game_over()
+                    
+                    # Chỉ lưu kinh nghiệm cho RL Agent (quân trắng)
+                    if old_state.turn == chess.WHITE:
+                        self.agent.remember(old_state, move, reward, game_board, done)
+                    
+                    # Chỉ gọi replay() sau mỗi 10 nước đi để tăng hiệu suất
+                    if moves_count % 10 == 0:
+                        self.agent.replay()
+                    
+                    moves_count += 1
+                
+                self.games_completed = game + 1
+                print(f"Game {game+1}/{num_games} hoàn thành sau {moves_count} nước")
+                
+                # Cập nhật target model sau mỗi trận đấu
+                self.agent.update_target_model()
+                
+                # Save model periodically
+                if (game + 1) % 10 == 0:
+                    try:
+                        model_path = f"chess_model_game_{game+1}.pth"
+                        torch.save(self.agent.model.state_dict(), model_path)
+                        print(f"Đã lưu mô hình tại {model_path}")
+                        
+                        # Lưu thêm một bản sao với tên cố định để dễ tải sau này
+                        torch.save(self.agent.model.state_dict(), "chess_model.pth")
+                        print("Đã lưu bản sao tại chess_model.pth")
+                    except Exception as e:
+                        print(f"Lỗi khi lưu mô hình: {e}")
+            
+            self.training_status = f"Da hoan thanh {self.games_completed}/{num_games} tran"
+            self.is_training = False
+        except Exception as e:
+            self.training_status = f"Loi training: {str(e)}"
+            self.is_training = False
+            print(f"Lỗi trong train_worker: {e}")
+    
     def start_training(self, num_games=100):
         """Bắt đầu quá trình training trong một thread riêng"""
         if self.is_training:
@@ -832,23 +1159,35 @@ class ChessGame:
                             self.reset_game()
                             self.last_move_time = time.time()
                 elif self.state == STATE_TRAINING:
-                    if event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_ESCAPE:
-                            self.state = STATE_MENU
-                            # Dừng training nếu đang chạy
-                            if self.is_training:
+                    if self.showing_training_menu:
+                        # Trong menu chọn đối thủ training
+                        agent_index = self.training_menu.handle_event(event)
+                        if agent_index is not None:
+                            if agent_index >= 0:
+                                self.opponent_agent = self.available_agents[agent_index]
+                                print(f"Đã chọn đối thủ training: {self.opponent_agent.name}")
+                            self.showing_training_menu = False
+                    else:
+                        if event.type == pygame.KEYDOWN:
+                            if event.key == pygame.K_ESCAPE:
+                                self.state = STATE_MENU
+                                # Dừng training nếu đang chạy
+                                if self.is_training:
+                                    self.is_training = False
+                                    self.training_status = "Đã dừng training"
+                            elif event.key == pygame.K_t and not self.is_training:
+                                # Hiển thị menu chọn đối thủ
+                                self.showing_training_menu = True
+                            elif event.key == pygame.K_s and not self.is_training:
+                                print("Bắt đầu quá trình training...")
+                                self.start_training(100)  # Train for 100 games
+                            elif event.key == pygame.K_l and not self.is_training:
+                                self.agent.load_model()
+                                self.training_status = "Da tai model thanh cong"
+                            elif event.key == pygame.K_x and self.is_training:
                                 self.is_training = False
-                                self.training_status = "Đã dừng training"
-                        elif event.key == pygame.K_s and not self.is_training:
-                            print("Bắt đầu quá trình training...")
-                            self.start_training(100)  # Train for 100 games
-                        elif event.key == pygame.K_l and not self.is_training:
-                            self.agent.load_model()
-                            self.training_status = "Da tai model thanh cong"
-                        elif event.key == pygame.K_x and self.is_training:
-                            self.is_training = False
-                            self.training_status = "Da dung training thu cong"
-                            print("Đã gửi yêu cầu dừng quá trình training...")
+                                self.training_status = "Da dung training thu cong"
+                                print("Đã gửi yêu cầu dừng quá trình training...")
                 else:  # STATE_HUMAN_VS_HUMAN or STATE_HUMAN_VS_AI
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         pos = pygame.mouse.get_pos()
@@ -875,6 +1214,8 @@ class ChessGame:
             # Vẽ giao diện dựa trên trạng thái hiện tại
             if self.state == STATE_MENU:
                 self.menu.draw()
+            elif self.state == STATE_TRAINING and self.showing_training_menu:
+                self.training_menu.draw()
             else:  # In game or training
                 self.draw_board()
                 self.draw_info_panel()
@@ -882,6 +1223,15 @@ class ChessGame:
             pygame.display.flip()
             self.clock.tick(FPS)
             
+        # Đảm bảo đóng các resources khi thoát
+        if hasattr(self, 'training_agents'):
+            for agent in self.training_agents:
+                if hasattr(agent, '__del__'):
+                    try:
+                        agent.__del__()
+                    except:
+                        pass
+                        
         pygame.quit()
 
 # Main function
