@@ -331,20 +331,23 @@ class StockfishAgent:
             return False
     
     def _find_stockfish(self):
-        # Tìm kiếm Stockfish trong các vị trí thông dụng
+    # Tìm kiếm Stockfish trong các vị trí thông dụng
         possible_paths = [
-            "stockfish",                       # Trong PATH
-            "./stockfish",                     # Thư mục hiện tại
-            "./engines/stockfish",             # Thư mục engines 
-            "engines/stockfish",               # Thư mục engines không có ./
-            "stockfish.exe",                   # Windows
-            "./stockfish.exe",                 # Windows trong thư mục hiện tại
-            "./engines/stockfish.exe",         # Windows trong thư mục engines 
-        ]
-        
+        "D:\\testAIAgent\\myPrj\\stockfish\\stockfish-windows-x86-64-avx2.exe",  # Thêm đường dẫn cụ thể của bạn
+        "stockfish",                       # Trong PATH
+        "./stockfish",                     # Thư mục hiện tại
+        "./engines/stockfish",             # Thư mục engines 
+        "engines/stockfish",               # Thư mục engines không có ./
+        "stockfish.exe",                   # Windows
+        "./stockfish.exe",                 # Windows trong thư mục hiện tại
+        "./engines/stockfish.exe",         # Windows trong thư mục engines
+        "/usr/bin/stockfish",              # Linux common path
+        "/usr/local/bin/stockfish",        # macOS common path
+    ]
+    
         for path in possible_paths:
             try:
-                # Thử mở để xem có tồn tại không
+            # Thử mở để xem có tồn tại không
                 if os.path.exists(path):
                     return path
             except:
@@ -364,11 +367,10 @@ class StockfishAgent:
             # Import lại chess.engine để đảm bảo có thể sử dụng
             import chess.engine
             
-            # Sử dụng thời gian ngắn hoặc độ sâu thấp khi training
-            if training:
-                result = self.engine.play(board, chess.engine.Limit(time=self.time_limit))
-            else:
-                result = self.engine.play(board, chess.engine.Limit(depth=self.depth))
+            # Luôn sử dụng thời gian ngắn khi training và trong game thường
+            # Để đảm bảo không vượt quá 10s giới hạn
+            limit = chess.engine.Limit(time=min(self.time_limit, 5.0))
+            result = self.engine.play(board, limit)
             return result.move
         except Exception as e:
             print(f"Lỗi khi sử dụng Stockfish: {e}")
@@ -626,7 +628,7 @@ class MainMenu:
         self.font_title = load_font(64)
         self.font = load_font(36)
         self.selected_option = 0
-        self.options = ["Người - Người", "Người - Máy", "Huấn luyện AI"]
+        self.options = ["Nguoi - Nguoi", "Nguoi - May", "Huan luyen AI"]
         
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
@@ -725,7 +727,7 @@ class TrainingMenu:
         self.screen.blit(guide, guide_rect)
         
         esc_guide = self.font.render("ESC: Quay lai", True, WHITE)
-        esc_rect = esc_guide.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 60))
+        esc_rect = esc_guide.get_rect(topright=(WINDOW_WIDTH - 20, 20))
         self.screen.blit(esc_guide, esc_rect)
 
 # ------------------- Chess Game class -------------------
@@ -765,6 +767,10 @@ class ChessGame:
         self.white_time = GAME_TIME
         self.black_time = GAME_TIME
         self.last_move_time = time.time()
+
+        # Thêm biến theo dõi thời gian cho mỗi nước đi
+        self.current_move_time = 0
+        self.MAX_MOVE_TIME = 10  # Giới hạn 10 giây cho mỗi nước đi
         
         # Training status
         self.is_training = False
@@ -997,17 +1003,20 @@ class ChessGame:
         try:
             # Cập nhật thời gian trước khi đi nước mới
             self.update_timer()
-            
+        
             # Make the move
             self.board.push(move)
             self.last_move = move
-            
+        
+            # Reset thời gian nước đi
+            self.current_move_time = 0
+        
             # Nếu đang ở chế độ người-máy và đến lượt máy
             if self.state == STATE_HUMAN_VS_AI and self.board.turn == chess.BLACK and not self.board.is_game_over():
                 # Thêm chút độ trễ để người chơi thấy được nước đi của mình trước
                 pygame.time.delay(500)
                 self.make_ai_move()
-                
+            
         except Exception as e:
             print(f"Lỗi trong make_move: {e}")
     
@@ -1201,17 +1210,31 @@ class ChessGame:
             # Cập nhật thời gian nếu đang trong chế độ chơi
             if self.state not in [STATE_MENU, STATE_TRAINING] and not self.board.is_game_over():
                 current_time = time.time()
+                
+                # Cập nhật thời gian tổng cho người chơi
                 if self.last_move_time is not None:
                     elapsed = current_time - self.last_move_time
                     
                     if self.board.turn == chess.WHITE:
                         self.white_time = max(0, self.white_time - elapsed)
+                        self.current_move_time += elapsed
                     else:
                         self.black_time = max(0, self.black_time - elapsed)
+                        self.current_move_time += elapsed
+                    
+                    # Nếu thời gian nước đi vượt quá 10s, tự động chọn một nước đi ngẫu nhiên
+                    if self.current_move_time > self.MAX_MOVE_TIME:
+                        legal_moves = list(self.board.legal_moves)
+                        if legal_moves:
+                            move = random.choice(legal_moves)
+                            self.make_move(move)
+                            print(f"Tự động chọn nước đi sau 10s: {move}")
+                            # Reset thời gian nước đi
+                            self.current_move_time = 0
                 
                 self.last_move_time = current_time
             
-            # Vẽ giao diện dựa trên trạng thái hiện tại
+            # Vẽ giao diện dựa trên trạng thái hiện tại - FIX: Moved outside the conditional block
             if self.state == STATE_MENU:
                 self.menu.draw()
             elif self.state == STATE_TRAINING and self.showing_training_menu:
@@ -1222,7 +1245,7 @@ class ChessGame:
             
             pygame.display.flip()
             self.clock.tick(FPS)
-            
+        
         # Đảm bảo đóng các resources khi thoát
         if hasattr(self, 'training_agents'):
             for agent in self.training_agents:
